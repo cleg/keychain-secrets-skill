@@ -12,9 +12,19 @@ The skill documents five operations:
 
 The procedure requires an interactive terminal for entering secret values, creates a backup before editing `~/.zshrc`, and warns when an item cannot be read while still exporting an empty variable. It never requires the agent to see the secret itself.
 
+## Opinionated behavior
+
+This skill deliberately keeps the environment variable exported when Keychain reading fails. The shell prints a warning and sets the variable to an empty value, allowing startup and subsequent commands to continue. An empty value may replace one inherited from an earlier process; this is part of the chosen behavior. Commands that use the variable decide for themselves how to handle an empty credential.
+
 ## Installation
 
-Use the skill file at [`macos-keychain-env-secrets/SKILL.md`](macos-keychain-env-secrets/SKILL.md). Place or symlink the `macos-keychain-env-secrets` directory into your agent's skills directory, according to that agent's conventions. The skill is written as instructions rather than an agent-specific executable.
+After the repository is published on GitHub, install the skill in the current project with the [skills CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add cleg/keychain-secrets-skill --skill macos-keychain-env-secrets
+```
+
+Add `-g` to install it for all your projects. For a manual installation, place or symlink the [`macos-keychain-env-secrets`](macos-keychain-env-secrets) directory into your agent's skills directory. The skill is written as instructions rather than an agent-specific executable.
 
 ## Limitations
 

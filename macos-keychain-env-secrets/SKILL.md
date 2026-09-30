@@ -15,6 +15,7 @@ Manage a mapping from a zsh environment variable to a macOS Keychain generic-pas
 - Default account is the current macOS account (`$USER`), service is the user-chosen Keychain name. Use a consistent account/service pair for lookup, modification, and deletion. Quote non-secret names as shell arguments. Avoid shell injection: never interpolate user-supplied names into executable shell source without correct shell quoting; validate environment-variable names against `^[A-Za-z_][A-Za-z0-9_]*$`.
 - Before *every* edit of `~/.zshrc`, make a timestamped, collision-safe backup outside version control, preserving ownership and restricting backup access to the owner (mode 600). The file or its backups may contain unrelated secrets; never print or commit either. Edit atomically where possible, preserve unrelated content, and validate syntax with `zsh -n ~/.zshrc` without sourcing. If validation fails, restore the backup. Do not silently delete backups.
 - Treat ambiguity, a locked Keychain, access denial, or other `security` errors as errors, not proof that an item is absent. Do not overwrite or delete unrelated data. Explain partial completion if one of the Keychain/file operations fails; never claim a transaction was atomic.
+- If the specific operation or observed state suggests that continuing could damage the user's configuration, overwrite a value, or delete the wrong item, stop before that action, explain the concrete risk without exposing secrets, and ask the user how to proceed. Do not pause for merely hypothetical edge cases.
 
 ## Mapping and helper
 
