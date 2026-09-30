@@ -1,5 +1,7 @@
 # macOS Keychain Environment Secrets Skill
 
+![A Keychain key connecting AI services and shell workflows](header.jpg)
+
 An agent-independent skill for managing API secrets stored as macOS Keychain generic-password items and exposed to shell programs through environment variables configured in `~/.zshrc`.
 
 The skill documents five operations:
@@ -18,7 +20,7 @@ This skill deliberately keeps the environment variable exported when Keychain re
 
 ## Installation
 
-After the repository is published on GitHub, install the skill in the current project with the [skills CLI](https://github.com/vercel-labs/skills):
+Install the skill in the current project with the [skills CLI](https://github.com/vercel-labs/skills):
 
 ```bash
 npx skills add cleg/keychain-secrets-skill --skill macos-keychain-env-secrets
