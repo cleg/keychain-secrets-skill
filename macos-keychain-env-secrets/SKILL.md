@@ -66,7 +66,7 @@ Before **every invocation**, resolve the script relative to the installed skill,
 | Script | Expected SHA-256 |
 | --- | --- |
 | `scripts/store-secret.js` | `081a7d19c980cbeefd8495f4402d7518afe54085e759b7828743607f734071a6` |
-| `scripts/config-preflight.js` | `ee821165521a7926cc215539ddd628835e6e06e6f817a6e65e54e3bd6a755000` |
+| `scripts/config-preflight.js` | `93c5170d885140aee03a112274f32587b5d6e3c41ec1850002cbfafe1a24579c` |
 
 ```sh
 script='/resolved/installed/skill/scripts/selected-helper.js'
@@ -110,7 +110,7 @@ Use installed `config-preflight.js` rather than generating inspection scripts fo
 
 | Invocation arguments | Success gate | Scope / result |
 | --- | --- | --- |
-| `install` | `ready` | Installation flags, selected startup path, and metadata baselines; follow INSTALL.md. |
+| `install` | `ready` | Installation flags and metadata baselines; a startup path is included only for initial setup. Follow INSTALL.md. |
 | `add VARIABLE SERVICE [ACCOUNT]` | `ready` | Managed-file preflight and resolved account; follow ADD.md. |
 | `resolve-update VARIABLE` | `resolved` | Exact mapped service/account; no loader/startup or file-writability inspection. |
 

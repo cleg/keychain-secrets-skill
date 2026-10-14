@@ -30,7 +30,7 @@ Each variable has exactly one declaration. Different variables may share an acco
 
 ## Installation boundary
 
-[INSTALL.md](INSTALL.md) owns initial managed-file setup and shell startup integration; install bundled `scripts/init.sh` unchanged. [ADD.md](ADD.md) owns the existing-setup requirement and startup-independent preflight. Loader upgrades, legacy migrations, and startup troubleshooting require separately resolved scope, not silent replacement or expansion of add.
+[INSTALL.md](INSTALL.md) owns initial managed-file setup and shell startup integration; install bundled `scripts/init.sh` unchanged. Both managed files mark an existing installation, not proof of runtime loading; repeat install leaves startup integration uninspected. [ADD.md](ADD.md) owns the existing-setup requirement and startup-independent preflight. Loader upgrades, legacy migrations, and startup troubleshooting require separately resolved scope, not silent replacement or expansion of install/add.
 
 ## Runtime behavior
 

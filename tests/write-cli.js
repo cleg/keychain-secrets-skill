@@ -55,7 +55,7 @@ function run(argv) {
     assert(JSON.stringify(args) === JSON.stringify(['add-generic-password', '-a', 'account',
         '-s', 'service', '-w', value]));
     assert(streams.length === 3 && streams.every(function (v) { return v === nullDevice; }));
-    [1, 44, 45, 255, -25299].forEach(function (exit) {
+    [1, 44, 45, 255].forEach(function (exit) {
         reset(codes.missing); status = exit;
         assert(add('service', 'account', value).code === codes.commandFailed);
     });

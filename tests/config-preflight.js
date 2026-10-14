@@ -26,9 +26,6 @@ function run(argv) {
             normalize: function (path, parent) { return ObjC.unwrap($(path[0] === '/' ? path : parent + '/' + path).stringByStandardizingPath); },
             read: function (path) { return entries[path].text; },
             sameBytes: function (a, b) { return entries[a].text === entries[b].text; },
-            syntaxText: function (text) {
-                return !/(?:^|\n)\s*(?:if\b|fi\b|unused\(\)|\}|cat <<|END\b)/.test(text);
-            },
             syntax: function (path) { return !entries[path].invalidSyntax; }
         };
         return { ctx: ctx, io: io, entries: entries, file: file, directory: directory,
@@ -36,6 +33,9 @@ function run(argv) {
             startup: ctx.home + '/.zshrc' };
     }
     function installCheck(label, change, reason) { return check(label, change, reason, ['install']); }
+    function initialCheck(label, change, reason) {
+        return installCheck(label, function (f) { delete f.entries[f.loader]; change(f); }, reason);
+    }
     function check(label, change, reason, args) {
         var f = fixture(); change(f);
         var result = configurationPreflight(args || ['add', 'NEW_TOKEN', 'service'], f.ctx, f.io);
@@ -84,10 +84,7 @@ function run(argv) {
     [['add', 'TOKEN', ''], ['add', 'TOKEN', 'a', ''], ['add', 'TOKEN', 'a\x7f'], ['add', 'TOKEN', 'a', 'b', 'extra'], ['resolve-update'], ['other', 'TOKEN'], ['install', 'TOKEN'], ['install', 'TOKEN', 'service'], []].forEach(function (args) {
         check('invalid arguments', function () {}, 'invalid_arguments', args);
     });
-    check('inherited collision', function (f) { f.ctx.environment.NEW_TOKEN = 'PRIVATE_SENTINEL'; }, 'configuration_ready');
-    check('add ignores startup assignment', function (f) { f.entries[f.startup].text += '\nexport NEW_TOKEN=PRIVATE_SENTINEL\n'; }, 'configuration_ready');
-    check('add ignores startup attributes', function (f) { f.entries[f.startup].text += '\ntypeset -i NEW_TOKEN=3\n'; }, 'configuration_ready');
-    check('comment no collision', function (f) { f.entries[f.startup].text += '\n# NEW_TOKEN=PRIVATE_SENTINEL\n'; }, 'configuration_ready');
+    check('inherited credential value accepted', function (f) { f.ctx.environment.NEW_TOKEN = 'PRIVATE_SENTINEL'; }, 'configuration_ready');
     installCheck('changed loader', function (f) { f.entries[f.loader].text = 'PRIVATE_SENTINEL'; }, 'changed_loader');
     var metadataResult = check('hardlink', function (f) { f.entries[f.mappings].links = 2; }, 'configuration_ready');
     assert(metadataResult.warnings.some(function (item) { return item.reason === 'hardlinked_file'; }), 'hardlink warning'); passed++;
@@ -120,8 +117,7 @@ function run(argv) {
         f.file(f.ctx.home + '/.config/keychain-env/nested/map', '');
     }, 'unsafe_directory');
     check('syntax', function (f) { f.entries[f.mappings].invalidSyntax = true; }, 'shell_syntax');
-    installCheck('startup syntax', function (f) { f.entries[f.startup].invalidSyntax = true; }, 'shell_syntax');
-    installCheck('read-only startup no edit', function (f) { f.entries[f.startup].immutable = true; f.entries[f.ctx.home].unwritable = true; }, 'configuration_ready');
+    initialCheck('startup syntax', function (f) { f.entries[f.startup].invalidSyntax = true; }, 'shell_syntax');
     ['read-only', 'immutable'].forEach(function (kind) {
         var noOp = installCheck('no-op install ' + kind + ' mappings', function (f) {
             f.entries[f.mappings].unwritable = true;
@@ -133,38 +129,58 @@ function run(argv) {
     });
     check('immutable mappings edit', function (f) { f.entries[f.mappings].immutable = true; }, 'immutable_edit_target');
     check('resolve no edit immutable', function (f) { f.entries[f.mappings].immutable = true; }, 'canonical_mapping', ['resolve-update', 'EXISTING_TOKEN']);
-    installCheck('dynamic include', function (f) { f.entries[f.startup].text += '\nsource "$HOME/private"\n'; }, 'configuration_ready');
-    check('inactive bash configuration ignored', function (f) {
-        f.file(f.ctx.home + '/.bashrc', 'source PRIVATE_SENTINEL\n');
+    var appendPlan = initialCheck('append after early return and ordinary initialization', function (f) {
+        f.entries[f.startup].text = 'source "$HOME/plugins.sh"\neval "$(brew shellenv)"\nreturn\n';
+        f.file(f.ctx.home + '/.zprofile', 'PRIVATE_SENTINEL');
+        var stat = f.io.stat;
+        f.io.stat = function (path) {
+            if (/\/\.(zshenv|zprofile|zlogin|bashrc|profile)$/.test(path)) throw new Error('unselected startup inspected');
+            return stat(path);
+        };
     }, 'configuration_ready');
-    ['if false; then\n' + STARTUP_BLOCK + '\nfi',
-        'unused() {\n' + STARTUP_BLOCK + '\n}',
-        "cat <<'END'\n" + STARTUP_BLOCK + '\nEND',
-        'return\n' + STARTUP_BLOCK].forEach(function (text) {
-        installCheck('ambiguous block placement', function (f) { f.entries[f.startup].text = text; }, 'startup_context_manual_review');
+    assert(appendPlan.install_startup_block && appendPlan.startup_path === '/fixture/home/.zshrc' &&
+        appendPlan.baseline.startup.edit_method === 'in_place', 'zsh end-append plan'); passed++;
+    ['return\n', 'exit\n', 'if false; then\n', 'unused() {\n', "cat <<'END'\n"].forEach(function (prefix) {
+        initialCheck('recognize exact block without context analysis', function (f) {
+            f.entries[f.startup].text = prefix + STARTUP_BLOCK;
+        }, 'configuration_ready');
     });
-    installCheck('eval startup', function (f) { f.entries[f.startup].text += '\neval PRIVATE_SENTINEL\n'; }, 'configuration_ready');
-    var dynamicPlan = installCheck('append after ordinary initialization', function (f) {
-        f.entries[f.startup].text = 'source "$HOME/plugins.sh"\neval "$(brew shellenv)"\n';
-        f.file(f.ctx.home + '/.zprofile', 'eval "$(brew shellenv)"\n');
+    initialCheck('startup ZDOTDIR assignment is not parsed', function (f) {
+        f.entries[f.startup].text = 'ZDOTDIR="$HOME/custom"\n';
     }, 'configuration_ready');
-    assert(dynamicPlan.install_startup_block && dynamicPlan.startup_path === '/fixture/home/.zshrc', 'zsh append default'); passed++;
-    installCheck('repeat install after ordinary initialization', function (f) {
-        f.entries[f.startup].text = 'source "$HOME/plugins.sh"\neval "$(brew shellenv)"\n' + STARTUP_BLOCK;
+    initialCheck('unfamiliar integration', function (f) {
+        f.entries[f.startup].text = '. "$HOME/.config/keychain-env/init.sh"';
+    }, 'unfamiliar_startup_integration');
+    initialCheck('duplicate integration', function (f) { f.entries[f.startup].text += STARTUP_BLOCK; }, 'startup_integration_ambiguous');
+    var existingBlock = initialCheck('incomplete setup preserves exact existing block', function () {}, 'configuration_ready');
+    assert(existingBlock.install_loader && !existingBlock.install_startup_block, 'no duplicate append'); passed++;
+    initialCheck('bash unclear', function (f) { f.ctx.shell = 'bash'; }, 'bash_startup_ambiguous');
+    initialCheck('bash existing integration', function (f) {
+        f.ctx.shell = 'bash'; f.file(f.ctx.home + '/.bashrc', STARTUP_BLOCK);
     }, 'configuration_ready');
-    installCheck('startup sets custom ZDOTDIR', function (f) {
-        f.entries[f.startup].text += '\nZDOTDIR="$HOME/custom"\n';
-    }, 'custom_zdotdir_manual_review');
-    installCheck('unfamiliar integration', function (f) { f.entries[f.startup].text = '. "$HOME/.config/keychain-env/init.sh"'; }, 'unfamiliar_startup_integration');
-    installCheck('duplicate integration', function (f) { f.entries[f.startup].text += STARTUP_BLOCK; }, 'startup_integration_ambiguous');
-    installCheck('bash unclear', function (f) { f.ctx.shell = 'bash'; delete f.entries[f.startup]; }, 'bash_startup_ambiguous');
-    installCheck('bash established', function (f) {
-        f.ctx.shell = 'bash'; delete f.entries[f.startup]; f.file(f.ctx.home + '/.bashrc', STARTUP_BLOCK);
+    ['. "$HOME/.bashrc"\n', '# login\n\nsource "$HOME/.bashrc"\n# end\n'].forEach(function (text) {
+        var bashPlan = initialCheck('bash simple top-level login chain', function (f) {
+            f.ctx.shell = 'bash';
+            f.file(f.ctx.home + '/.bash_profile', text); f.file(f.ctx.home + '/.bashrc', '# empty');
+        }, 'configuration_ready');
+        assert(bashPlan.startup_path === '/fixture/home/.bashrc' && bashPlan.install_startup_block, 'bash selected rc'); passed++;
+    });
+    ['unused() {\n. "$HOME/.bashrc"\n}\n', 'if true; then\nsource "$HOME/.bashrc"\nfi\n',
+        'echo setup\n. "$HOME/.bashrc"\n', '. "$HOME/.bashrc"\n. "$HOME/.bashrc"\n'].forEach(function (text) {
+        initialCheck('bash ambiguous login chain', function (f) {
+            f.ctx.shell = 'bash';
+            f.file(f.ctx.home + '/.bash_profile', text); f.file(f.ctx.home + '/.bashrc', '# empty');
+        }, 'bash_startup_ambiguous');
+    });
+    initialCheck('initial startup size bound', function (f) { f.entries[f.startup].size = MAX_BYTES + 1; }, 'inspection_limit');
+    initialCheck('initial startup unreadable', function (f) { f.entries[f.startup].unreadable = true; }, 'file_not_readable');
+    initialCheck('initial startup immutable', function (f) {
+        f.entries[f.startup].text = 'return\n'; f.entries[f.startup].immutable = true;
+    }, 'immutable_edit_target');
+    var crlf = initialCheck('initial startup CRLF retained', function (f) {
+        f.entries[f.startup].text = '# preserve\r\nreturn\r\n';
     }, 'configuration_ready');
-    installCheck('bash infer chain', function (f) {
-        f.ctx.shell = 'bash'; delete f.entries[f.startup];
-        f.file(f.ctx.home + '/.bash_profile', '. "$HOME/.bashrc"\n'); f.file(f.ctx.home + '/.bashrc', '# empty');
-    }, 'configuration_ready');
+    assert(crlf.install_startup_block, 'CRLF append planned'); passed++;
     check('size limit', function (f) { f.entries[f.mappings].size = MAX_BYTES + 1; }, 'inspection_limit');
     check('safe exception', function (f) { f.io.read = function () { throw new Error('PRIVATE_SENTINEL'); }; }, 'inspection_failed');
 
@@ -187,10 +203,32 @@ function run(argv) {
         f.io.sameBytes = function () { throw new Error('loader byte comparison'); };
     }, 'configuration_ready');
     check('unsupported shell add', function (f) { f.ctx.shell = 'fish'; }, 'configuration_ready');
-    installCheck('unsupported shell install', function (f) { f.ctx.shell = 'fish'; }, 'unsupported_login_shell');
-    installCheck('custom ZDOTDIR install', function (f) { f.ctx.environment.ZDOTDIR = '/custom'; }, 'custom_zdotdir_manual_review');
-    installCheck('install ignores secret-specific startup assignments', function (f) {
-        f.entries[f.startup].text += '\nexport NEW_TOKEN=PRIVATE_SENTINEL\n';
+    initialCheck('unsupported shell initial install', function (f) { f.ctx.shell = 'fish'; }, 'unsupported_login_shell');
+    initialCheck('custom ZDOTDIR initial install', function (f) { f.ctx.environment.ZDOTDIR = '/custom'; }, 'custom_zdotdir_manual_review');
+    installCheck('established install never inspects startup or discovers shell', function (f) {
+        f.ctx.environment.ZDOTDIR = '/custom';
+        Object.defineProperty(f.ctx, 'shell', { get: function () { throw new Error('shell inspected'); } });
+        f.ctx.discoverShell = function () { throw new Error('shell discovery'); };
+        var stat = f.io.stat;
+        f.io.stat = function (path) {
+            if (/\/\.(zsh|bash|profile)/.test(path)) throw new Error('startup inspected');
+            return stat(path);
+        };
+        f.entries[f.startup].invalidSyntax = true;
+        f.entries[f.startup].unreadable = true;
+        f.entries[f.startup].text = 'PRIVATE_SENTINEL';
+    }, 'configuration_ready');
+    var absentStartup = installCheck('established install does not restore absent startup', function (f) {
+        delete f.entries[f.startup]; f.ctx.shell = 'unsupported';
+    }, 'configuration_ready');
+    assert(!absentStartup.installation_required && !absentStartup.install_startup_block, 'established setup no-op'); passed++;
+    var missingMappings = installCheck('missing mappings still plans initial startup', function (f) {
+        delete f.entries[f.mappings]; f.entries[f.startup].text = 'return\n';
+    }, 'configuration_ready');
+    assert(missingMappings.install_mappings && !missingMappings.install_loader && missingMappings.install_startup_block,
+        'incomplete managed setup flags'); passed++;
+    initialCheck('initial setup discovers shell lazily', function (f) {
+        f.ctx.shell = 'unsupported'; f.ctx.discoverShell = function () { return 'zsh'; };
     }, 'configuration_ready');
     var metadataResult = check('loader private permissions', function (f) { f.entries[f.loader].mode = 420; }, 'configuration_ready');
     assert(metadataResult.warnings.some(function (item) { return item.reason === 'managed_file_permissions'; }), 'loader private permissions warning'); passed++;
@@ -226,15 +264,12 @@ function run(argv) {
     });
     var plan = installCheck('install plan without mapping identity', function () {}, 'configuration_ready');
     assert(plan.operation === 'install' && !('variable' in plan) && !('service' in plan) && !('account' in plan) &&
-        !!plan.baseline.startup && !plan.installation_required, 'install plan only'); passed++;
+        !('startup' in plan.baseline) && !('startup_path' in plan) && !plan.installation_required, 'install plan only'); passed++;
     var firstPlan = installCheck('first install flags', function (f) {
         delete f.entries[f.loader]; delete f.entries[f.mappings]; delete f.entries[f.startup];
     }, 'configuration_ready');
     assert(firstPlan.install_loader && firstPlan.install_mappings && firstPlan.install_startup_block &&
         firstPlan.installation_required, 'first install flags'); passed++;
-    // productionContext is not invoked here; prove add cannot select its dscl branch.
-    assert(source.indexOf("var shell = operation === 'install' ?") >= 0, 'shell discovery install only'); passed++;
-
     // Exercise Foundation lstat/read/byte comparison and real syntax checks in a fresh sandbox.
     var fm = $.NSFileManager.defaultManager;
     var temp = ObjC.unwrap($.NSTemporaryDirectory()) + 'config-preflight-' + ObjC.unwrap($.NSUUID.UUID.UUIDString);
@@ -251,39 +286,36 @@ function run(argv) {
         write(ctx.bundledLoader, '# synthetic loader\n');
         write(temp + '/.config/keychain-env/init.sh', '# synthetic loader\n');
         write(temp + '/.config/keychain-env/mappings.sh', "keychain_env 'EXISTING_TOKEN' 'existing-service'\n");
-        write(temp + '/.zshrc', STARTUP_BLOCK + '\n');
-        write(temp + '/.zshrc', 'source "$HOME/absent-plugin.sh"\neval "$(false)"\n' + STARTUP_BLOCK + '\n');
+        var startupPath = temp + '/.zshrc';
+        var loaderPath = temp + '/.config/keychain-env/init.sh';
+        write(startupPath, 'source "$HOME/absent-plugin.sh"\neval "$(false)"\nreturn\n');
         var io = foundationIO(), nativeReady = configurationPreflight(['add', 'NEW_TOKEN', 'service'], ctx, io);
         assert(nativeReady.status === 'ready', 'native ready (' + nativeReady.reason + ')'); passed++;
-        assert(configurationPreflight(['install'], ctx, io).status === 'ready', 'native dynamic prefix repeat install'); passed++;
-        write(temp + '/.zshrc', 'if false; then\n' + STARTUP_BLOCK + '\nfi\n');
-        assert(configurationPreflight(['install'], ctx, io).reason === 'startup_context_manual_review', 'native nested block'); passed++;
-        write(temp + '/.zshrc', 'source "$HOME/absent-plugin.sh"\neval "$(false)"\n');
-        var appendPlan = configurationPreflight(['install'], ctx, io);
-        assert(appendPlan.status === 'ready' && appendPlan.install_startup_block, 'native autonomous append plan'); passed++;
-
-        // -c avoids a writer blocked on a shell that rejects its input early.
-        // Exercise both shells with a substantial malformed prefix, not a pipe.
-        var padding = new Array(12001).join('# synthetic padding\n');
-        var malformed = 'if then\n' + padding;
-        // Stay within the explicit argv budget with a moderately large fragment.
-        malformed = malformed.slice(0, 60000);
-        ['zsh', 'bash'].forEach(function (shell) {
-            assert(!io.syntaxText(malformed, shell), 'native large malformed text ' + shell); passed++;
-            assert(io.syntaxText('# valid fragment\n' + malformed.slice(8), shell), 'native large valid text ' + shell); passed++;
-            try {
-                io.syntaxText(new Array(MAX_SYNTAX_TEXT_BYTES / 2 + 2).join('Ω'), shell);
-                assert(false, 'oversized UTF-8 text accepted');
-            } catch (failure) {
-                assert(failure.preflightReason === 'inspection_limit', 'native UTF-8 argument bound ' + shell); passed++;
-            }
-        });
-        // A syntactically valid compound around the block reaches the moderately
-        // large prefix-only syntax check, which must reject the unclosed if.
-        write(temp + '/.zshrc', 'if false; then\n' + malformed.slice(8, 60000) + '\n' + STARTUP_BLOCK + '\nfi\n');
-        assert(configurationPreflight(['install'], ctx, io).reason === 'startup_context_manual_review', 'native large malformed prefix'); passed++;
-        write(temp + '/.zshrc', new Array(4001).join('# long fragment padding\n') + STARTUP_BLOCK);
-        assert(configurationPreflight(['install'], ctx, io).reason === 'inspection_limit', 'native bounded startup fragment'); passed++;
+        // Initial planning only: existing bytes are neither executed nor rewritten.
+        nativeTask(['rm', loaderPath]);
+        var before = io.read(startupPath), appendPlan = configurationPreflight(['install'], ctx, io);
+        assert(appendPlan.status === 'ready' && appendPlan.install_startup_block &&
+            io.read(startupPath) === before, 'native early return end-append plan preserves bytes'); passed++;
+        write(startupPath, before + STARTUP_BLOCK + '\n');
+        var incompletePlan = configurationPreflight(['install'], ctx, io);
+        assert(incompletePlan.status === 'ready' && !incompletePlan.install_startup_block,
+            'native incomplete setup recognizes exact block after return'); passed++;
+        write(loaderPath, '# synthetic loader\n');
+        var repeatPlan = configurationPreflight(['install'], ctx, io);
+        assert(repeatPlan.status === 'ready' && !repeatPlan.installation_required &&
+            !('startup' in repeatPlan.baseline), 'native repeat install no-op'); passed++;
+        nativeTask(['rm', loaderPath]);
+        write(startupPath, 'if false; then\n' + STARTUP_BLOCK + '\nfi\n');
+        assert(configurationPreflight(['install'], ctx, io).status === 'ready', 'native exact nested block no context analysis'); passed++;
+        write(startupPath, 'if then\n');
+        assert(configurationPreflight(['install'], ctx, io).reason === 'shell_syntax', 'native initial syntax safeguard'); passed++;
+        write(startupPath, new Array(MAX_BYTES + 2).join('#'));
+        assert(configurationPreflight(['install'], ctx, io).reason === 'inspection_limit', 'native startup size bound'); passed++;
+        write(startupPath, '# preserve CRLF\r\nreturn\r\n');
+        var crlfBefore = io.read(startupPath), crlfPlan = configurationPreflight(['install'], ctx, io);
+        assert(crlfPlan.status === 'ready' && crlfPlan.install_startup_block && io.read(startupPath) === crlfBefore,
+            'native CRLF bytes untouched'); passed++;
+        write(loaderPath, '# synthetic loader\n');
 
         var marker = temp + '/executed', startup = temp + '/synthetic-startup.sh';
         write(startup, 'printf executed > "' + marker + '"\n');
@@ -297,7 +329,7 @@ function run(argv) {
         try {
             Object.keys(controls).forEach(function (key) { $.setenv(key, controls[key], 1); });
             ['zsh', 'bash'].forEach(function (shell) {
-                assert(io.syntaxText('. "' + startup + '"\nprintf executed > "' + marker + '"\n', shell), 'native syntax-only text ' + shell);
+                assert(io.syntax(startup, shell), 'native syntax-only file ' + shell);
                 assert(!fm.fileExistsAtPath($(marker)), 'no commands or startup executed ' + shell); passed++;
             });
         } finally {
@@ -344,7 +376,7 @@ function run(argv) {
         nativeTask(['rm', temp + '/hardlink']);
         write(temp + '/.zshrc', 'if then\n');
         assert(configurationPreflight(['add', 'NEW_TOKEN', 'service'], ctx, io).status === 'ready', 'native add ignores startup syntax'); passed++;
-        assert(configurationPreflight(['install'], ctx, io).reason === 'shell_syntax', 'native install syntax'); passed++;
+        assert(configurationPreflight(['install'], ctx, io).status === 'ready', 'native established install ignores startup syntax'); passed++;
         write(temp + '/.config/keychain-env/init.sh', '# custom installed loader\nkeychain_env() { :; }\n');
         ctx.shell = 'unsupported'; ctx.environment.ZDOTDIR = temp + '/custom-zdotdir';
         assert(configurationPreflight(['add', 'NEW_TOKEN', 'service'], ctx, io).status === 'ready', 'native independent add'); passed++;

@@ -6,9 +6,6 @@ ObjC.import('Foundation');
 ObjC.bindFunction('getuid', ['unsigned int', []]);
 // Bound file inspection; this helper plans changes but never applies them.
 var MAX_BYTES = 1048576;
-// -c text shares macOS ARG_MAX with arguments/environment. Keep fragments
-// comfortably below that limit; full-file syntax checks still use syntax(path).
-var MAX_SYNTAX_TEXT_BYTES = 65536;
 var STARTUP_BLOCK = "# Keychain environment configuration\n" +
     'if [ -r "$HOME/.config/keychain-env/init.sh" ]; then\n' +
     '    . "$HOME/.config/keychain-env/init.sh"\nelse\n' +
@@ -149,47 +146,37 @@ function editParent(file, ctx, io) {
 }
 
 function startupInspection(ctx, io) {
-    // Install-only inspection recognizes the managed block without running startup
-    // code. Unfamiliar integration is left for review, not guessed or migrated.
-    var names = ctx.shell === 'zsh' ? ['.zshenv', '.zprofile', '.zshrc', '.zlogin'] :
+    // Initial zsh setup only appends to .zshrc. Do not infer execution flow or
+    // inspect other zsh startup files; existing bytes remain the editor's concern.
+    var names = ctx.shell === 'zsh' ? ['.zshrc'] :
         ['.bash_profile', '.bash_login', '.bashrc', '.profile'];
-    var files = {}, integrated = [];
+    var files = {}, texts = {}, integrated = [];
     names.forEach(function (name) {
         var file = inspectFile(ctx.home + '/' + name, ctx.home, ctx, io, false);
         files[name] = file;
         if (!file.exists) return;
         var text = io.read(file.destination).replace(/\r\n/g, '\n');
-        syntax(file, [name.indexOf('.z') === 0 ? 'zsh' : 'bash'], io);
+        texts[name] = text;
+        syntax(file, [ctx.shell], io);
         var count = text.split(STARTUP_BLOCK).length - 1;
         if (count > 1) stop('startup_integration_ambiguous');
-        if (count === 1) {
-            // Validate prefix/suffix independently: a block inside a compound command
-            // or heredoc cannot be treated as established top-level integration.
-            var offset = text.indexOf(STARTUP_BLOCK);
-            var prefix = text.slice(0, offset), suffix = text.slice(offset + STARTUP_BLOCK.length);
-            if (!io.syntaxText(prefix, ctx.shell) || !io.syntaxText(suffix, ctx.shell) ||
-                /^\s*(?:return|exit)(?:\s|;|$)/m.test(prefix)) stop('startup_context_manual_review');
-            integrated.push(name);
-        }
-        text = text.replace(STARTUP_BLOCK, '');
-        var active = text.split('\n').filter(function (line) { return !/^[ \t]*#/.test(line); }).join('\n');
-        // A single established bash login -> interactive chain is recognizable, not executed.
-        if (name === '.bash_profile') active = active.replace(/^\s*(?:\.|source) "\$HOME\/\.bashrc"\s*$/gm, '');
+        if (count === 1) integrated.push(name);
+        var active = text.replace(STARTUP_BLOCK, '').split('\n').filter(function (line) {
+            return !/^[ \t]*#/.test(line);
+        }).join('\n');
         if (/keychain_env|keychain-env\/init\.sh/.test(active)) stop('unfamiliar_startup_integration');
-        // Ordinary source/eval initialization is preserved, not executed or chased.
-        if (/\bZDOTDIR\s*=/.test(active)) stop('custom_zdotdir_manual_review');
     });
     if (integrated.length > 1) stop('startup_integration_ambiguous');
-    if (integrated.length === 1) {
-        var name = integrated[0];
-        if ((ctx.shell === 'zsh') !== (name.indexOf('.z') === 0)) stop('startup_shell_mismatch');
-        return { file: files[name], install: false };
-    }
+    if (integrated.length === 1) return { file: files[integrated[0]], install: false };
     if (ctx.shell === 'zsh') return { file: files['.zshrc'], install: true };
-    if (ctx.shell !== 'bash') stop('unsupported_login_shell');
+    // Only a plain login chain is inferred: comments/blank lines and exactly one
+    // standalone source. A source inside a function or compound is not evidence.
+    var loginLines = (texts['.bash_profile'] || '').split('\n').filter(function (line) {
+        return !/^[ \t]*(#.*)?$/.test(line);
+    });
     if (files['.bash_profile'].exists && files['.bashrc'].exists &&
         !files['.bash_login'].exists && !files['.profile'].exists &&
-        /^\s*(?:\.|source) "\$HOME\/\.bashrc"\s*$/m.test(io.read(files['.bash_profile'].destination))) {
+        loginLines.length === 1 && /^[ \t]*(?:\.|source) "\$HOME\/\.bashrc"[ \t]*$/.test(loginLines[0])) {
         return { file: files['.bashrc'], install: true };
     }
     stop('bash_startup_ambiguous');
@@ -237,8 +224,8 @@ function resolveUpdate(result, inspected) {
 }
 
 function planAdd(result, inspected, ctx, io) {
-    // Existing managed files mark installation for add. Startup discovery and
-    // loader replacement belong to explicit install, not this credential operation.
+    // Existing managed files mark installation. Add never discovers startup or
+    // compares the loader with the bundled version.
     if (inspected.declarations.some(function (item) { return item.variable === result.variable; })) {
         stop('variable_already_mapped');
     }
@@ -253,20 +240,28 @@ function planAdd(result, inspected, ctx, io) {
 
 function planInstall(result, inspected, ctx, io) {
     var loader = inspected.loader, mappings = inspected.mappings;
-    if (ctx.shell !== 'zsh' && ctx.shell !== 'bash') stop('unsupported_login_shell');
-    if (ctx.environment.ZDOTDIR && ctx.environment.ZDOTDIR !== ctx.home) stop('custom_zdotdir_manual_review');
     if (loader.exists && !io.sameBytes(loader.destination, ctx.bundledLoader)) stop('changed_loader');
     if (!io.readable(ctx.bundledLoader)) stop('bundled_loader_unavailable', 'error');
     syntax({ exists: true, destination: ctx.bundledLoader }, ['sh', 'zsh', 'bash'], io);
     syntax(loader, ['sh', 'zsh', 'bash'], io);
-    var startup = startupInspection(ctx, io);
-    if (!loader.exists || !mappings.exists) {
-        inspectDirectory(inspected.creationParent, ctx, io, false, true);
+    if (loader.exists && mappings.exists) {
+        result.status = 'ready'; result.reason = 'configuration_ready';
+        result.installation_required = false;
+        result.install_loader = false; result.install_mappings = false; result.install_startup_block = false;
+        result.baseline = { loader: loader, mappings: mappings };
+        return result;
     }
+    if (ctx.discoverShell) ctx.shell = ctx.discoverShell();
+    if (ctx.shell !== 'zsh' && ctx.shell !== 'bash') stop('unsupported_login_shell');
+    if (ctx.shell === 'zsh' && ctx.environment.ZDOTDIR && ctx.environment.ZDOTDIR !== ctx.home) {
+        stop('custom_zdotdir_manual_review');
+    }
+    var startup = startupInspection(ctx, io);
+    inspectDirectory(inspected.creationParent, ctx, io, false, true);
     // Install preserves existing mappings, even when they cannot be edited.
     if (startup.install) editParent(startup.file, ctx, io);
     result.status = 'ready'; result.reason = 'configuration_ready';
-    result.installation_required = !loader.exists || !mappings.exists || startup.install;
+    result.installation_required = true;
     result.install_loader = !loader.exists; result.install_mappings = !mappings.exists;
     result.install_startup_block = startup.install; result.startup_path = startup.file.path;
     result.baseline = { loader: loader, mappings: mappings, startup: startup.file };
@@ -338,13 +333,6 @@ function foundationIO() {
             if (first.isNil() || second.isNil()) stop('bundled_loader_unavailable', 'error');
             return !!first.isEqualToData(second);
         },
-        syntaxText: function (text, shell) {
-            var flags = shell === 'zsh' ? ['-f', '-n'] : ['--noprofile', '--norc', '-n'];
-            if (Number($(text).lengthOfBytesUsingEncoding($.NSUTF8StringEncoding)) > MAX_SYNTAX_TEXT_BYTES) {
-                stop('inspection_limit');
-            }
-            return silentTask('/bin/' + shell, flags.concat(['-c', text])).code === 0;
-        },
         syntax: function (path, shell) {
             var flags = shell === 'zsh' ? ['-f', '-n'] : shell === 'bash' ? ['--noprofile', '--norc', '-n'] : ['-n'];
             return silentTask('/bin/' + shell, flags.concat([path])).code === 0;
@@ -368,24 +356,26 @@ function silentTask(path, args, capture) {
     return { code: Number(task.terminationStatus), text: capture ? ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding)) : '' };
 }
 
-function productionContext(operation) {
+function productionContext() {
     var args = ObjC.deepUnwrap($.NSProcessInfo.processInfo.arguments);
     var script = args.filter(function (arg) { return /^\/.*\/config-preflight\.js$/.test(arg); })[0];
     if (!script) stop('absolute_script_path_required', 'error');
     script = ObjC.unwrap($(script).stringByResolvingSymlinksInPath);
-    // Resolve the actual macOS identity; inherited USER is not authoritative.
-    // Only install needs login-shell discovery; add/update ignore startup files.
+    // Resolve the actual identity; inherited USER is not authoritative. Login
+    // shell discovery is deferred until inspection proves setup is incomplete.
     var account = ObjC.unwrap($.NSUserName());
-    var shell = operation === 'install' ?
-        silentTask('/usr/bin/dscl', ['.', '-read', '/Users/' + account, 'UserShell'], true) : { code: 1 };
-    var match = shell.code === 0 && /^UserShell: \/(?:bin|usr\/local\/bin|opt\/homebrew\/bin)\/(zsh|bash)\s*$/.exec(shell.text || '');
     return { home: ObjC.unwrap($.NSHomeDirectory()), account: account, uid: Number($.getuid()),
-        shell: match ? match[1] : 'unsupported', bundledLoader: parentPath(script) + '/init.sh',
+        discoverShell: function () {
+            var shell = silentTask('/usr/bin/dscl', ['.', '-read', '/Users/' + account, 'UserShell'], true);
+            var match = shell.code === 0 && /^UserShell: \/(?:bin|usr\/local\/bin|opt\/homebrew\/bin)\/(zsh|bash)\s*$/.exec(shell.text || '');
+            return match ? match[1] : 'unsupported';
+        },
+        bundledLoader: parentPath(script) + '/init.sh',
         environment: ObjC.deepUnwrap($.NSProcessInfo.processInfo.environment) };
 }
 
 function run(argv) {
-    try { return JSON.stringify(configurationPreflight(argv, productionContext(argv[0]), foundationIO())); }
+    try { return JSON.stringify(configurationPreflight(argv, productionContext(), foundationIO())); }
     catch (failure) { return JSON.stringify({ status: failure.preflightStatus || 'error',
         reason: failure.preflightReason || 'inspection_failed' }); }
 }

@@ -79,7 +79,7 @@ Add `-g` to install it for all your projects. For a manual installation, place o
 
 ## Set up shell loading
 
-After installing the skill, explicitly ask your agent to run its `install` operation. This creates the managed files and establishes shell loading without collecting or storing a secret. Installation owns startup-file inspection and edits; add never performs setup automatically. For zsh, an explicit install request autonomously appends the loader block to the end of `~/.zshrc`, preserving ordinary `source`/`eval` initialization. Completion mentions that you can move the whole block to change loading order. Concrete conflicts, custom ZDOTDIR, invalid syntax, and ambiguous existing integration still need resolution. See the [install workflow](macos-keychain-env-secrets/references/INSTALL.md).
+After installing the skill, explicitly ask your agent to run its `install` operation. This creates the managed files and establishes shell loading without collecting or storing a secret. Initial installation owns shell integration; add never performs setup automatically. Both managed files mark an existing setup, so repeat installation does not inspect or repair startup integration. For initial zsh setup, an explicit install request autonomously appends the loader block to the end of `~/.zshrc`, preserving ordinary `source`/`eval` initialization. This assumes the file normally runs from beginning to end. If you have custom control flow, early returns, or other unusual startup logic, review the placement manually; you can move the whole integration block wherever it fits your setup. Completion reminds you that the block was added at the end and can be moved. Concrete file conflicts, invalid syntax, an inherited non-default ZDOTDIR during initial setup, and ambiguous bash startup arrangements still need resolution. Startup troubleshooting is a separate request. See the [install workflow](macos-keychain-env-secrets/references/INSTALL.md).
 
 ## Runtime configuration
 
@@ -102,7 +102,7 @@ An explicit install creates a one-time startup block that sources init.sh. Add r
 
 Add follows the dedicated [add procedure](macos-keychain-env-secrets/references/ADD.md): require existing managed files, configuration preflight, native creation, then a guarded mapping edit. Managed-file readability, syntax, canonical declarations, duplicate mappings, and editability remain checked. Different ownership, non-default permissions, and hard links return informational warnings when an appropriate edit method exists. Existing inherited credential values are allowed; no values are returned. ACLs and flags matter only when they affect access or editing, and com.apple.provenance is ignored. Startup assignments and integration are intentionally outside add preflight; runtime attribute checks still protect unsupported targets. Preflight is read-only, not a transaction or a guarantee about arbitrary startup code; file identity and content must still be rechecked immediately before edits. Update resolves its target and invokes the native helper directly, leaving files untouched. Neither normal add nor update needs a separate Keychain `check` call: `store-secret.js` already performs its own metadata preflight before opening secure entry and checks the target again before writing. Explicit `check` remains available for diagnostics and uncertain outcomes. Both installed helpers are integrity-checked before invocation.
 
-Managed mappings use LF line endings; preflight rejects CRLF rather than resolving names differently from the shell. Install checks editability only for files it changes, so existing read-only mappings can be reused. Startup integration context is validated with syntax-only shell `-c` calls rather than stdin pipes. These fragments are limited to 64 KiB of UTF-8 text to leave room under macOS argument limits; full-file inspection retains its 1 MiB limit. Oversized fragments return `inspection_limit`.
+Managed mappings use LF line endings; preflight rejects CRLF rather than resolving names differently from the shell. Install checks editability only for files it changes, so existing read-only mappings can be reused. File inspection is bounded at 1 MiB; oversized files return `inspection_limit`. Syntax checks do not execute configuration or establish whether a startup block will be reached.
 
 See [configuration specification](macos-keychain-env-secrets/references/CONFIG.md) for canonical quoting, duplicate handling, startup integration, accounts, and failure behavior. There is no automatic legacy migration. Existing user configuration can be moved as a separately authorized task. Removal does not unset values in running shells, even if the loader is reloaded.
 
@@ -129,11 +129,15 @@ osascript -l JavaScript tests/store-secret.js "$PWD/macos-keychain-env-secrets/s
 
 The opt-in test creates one UUID-named disposable item with public synthetic data using the production add function. Its first password read immediately invokes `/usr/bin/security`, discards stdout/stderr, and asserts exit status only, without any prior read approval. It checks metadata presence and collision refusal; it does not inspect the value or run update. It exercises production check, removal, and repeated missing-item removal. Cleanup uses the same production removal with unique metadata and an explicitly resolved owning Keychain; no unscoped deletion is used. The result reports the disposable metadata and cleanup status, including leftovers if cleanup fails. No existing credentials or user shell configuration are accessed. System authorization is possible; do not approve a first-read prompt and then call that prompt-free proof. Actual modal entry/cancellation, retries, and keyboard navigation need a separately authorized GUI trial.
 
-On 2026-10-14, the separately authorized CLI-add upgrade passed that native synthetic test: production add, first CLI read with both output streams discarded and status zero, metadata/collision refusal, and exact disposable cleanup. No prompt was observed and no prior read approval was given; no item was left behind. This establishes first-read access for that new synthetic item on this unlocked local setup, not locked-Keychain behavior, secret-value equality, GUI interaction, or a universal no-prompt guarantee. The reviewed helper digest is pinned in SKILL.md and must be verified before live GUI use.
+### Workflow evidence and limits
 
-The user completed a production-helper add/update/remove workflow on 2026-10-14 and reported successful operations; update displayed a system Keychain authorization prompt. A subsequent user-run direct CLI workflow without explicit trusted-application flags completed creation, reads, update, and deletion without additional prompts. Based on that comparison, add/update now omit explicit trusted-application flags and rely on the default creator access policy. Mocked argument contracts cover this change; a native trial of the revised helper remains separate and opt-in. The earlier synthetic first-read evidence above applies to the previous explicit-trust implementation, not proof of prompt-free behavior for this revision. After the flag removal, the user completed another agent-driven add/update/remove cycle with the production helper on 2026-10-14 and reported that everything worked. The helper returned `created`, `updated`, and `deleted`; this is user-confirmed workflow evidence, not independent password readback or a guarantee that system authorization is never needed.
+The current default-creator-access helper received a user-confirmed agent-driven add/update/remove trial on 2026-10-14, returning `created`, `updated`, and `deleted`. This is workflow evidence, not independent password readback or a guarantee of prompt-free operation. The author also confirmed shell loading after migration to the managed layout.
 
-Whole-workflow assurance requires an explicitly agreed agent trial; isolated integration checks do not establish agent compliance. Broader mocked GUI/control-flow coverage remains deferred; the focused add/update transport contracts below cover this authorized backend change. Syntax/static verification can be done without accessing Keychain or the real shell configuration.
+An earlier explicit-trust revision passed an authorized synthetic first-read test on an unlocked local setup, with output discarded and no prompt observed. That historical result does not establish first-read behavior for the current revision. System authorization remains possible.
+
+Mocked and isolated tests cover transport, metadata refusal, configuration planning, and selected entry-point behavior. They do not establish full GUI interaction, arbitrary startup behavior, or agent compliance; native mutation and GUI trials remain separately authorized, opt-in work.
+
+### Non-mutating checks
 
 Pure validator tests cover CR/LF/NUL rejection, exact whitespace/Unicode comparisons, and every forbidden ASCII metadata control character. They evaluate only the production validation functions, without loading Security/AppKit, calling Keychain, or opening dialogs:
 
@@ -150,7 +154,7 @@ osascript -l JavaScript tests/metadata-cli.js "$PWD/macos-keychain-env-secrets/s
 A mocked add/update-contract test exercises the production functions with a fake task: insert-only add, Keychain-scoped `-U` update, absence of explicit trust flags, exact Unicode/whitespace argument preservation, discarded I/O, collision/missing/ambiguity/access-error refusal, and conservative failure mapping. It makes no Keychain calls and does not establish prompt-free retrieval:
 
 ```sh
-osascript -l JavaScript tests/shell-reader-access.js "$PWD/macos-keychain-env-secrets/scripts/store-secret.js"
+osascript -l JavaScript tests/write-cli.js "$PWD/macos-keychain-env-secrets/scripts/store-secret.js"
 ```
 
 A mocked entry-point test verifies that direct add/update calls run their internal metadata preflight before opening native entry, and refuse missing/collision/ambiguous/error states as appropriate. It also checks write-result propagation and cancellation with mocked fields. It makes no Keychain calls or GUI requests:
@@ -159,7 +163,7 @@ A mocked entry-point test verifies that direct add/update calls run their intern
 osascript -l JavaScript tests/write-entry.js "$PWD/macos-keychain-env-secrets/scripts/store-secret.js"
 ```
 
-The read-only configuration helper has isolated temporary-filesystem tests for install planning, startup-independent add preflight, missing-file diagnostics, update mapping resolution, warning-only ownership/permission differences, inherited-value acceptance, ignored provenance, in-place versus replacement edit planning, CRLF refusal, no-op installs with read-only/immutable mappings, and bounded syntax-only startup fragments; these never use the real shell configuration or Keychain:
+The read-only configuration helper has isolated temporary-filesystem tests for install planning, startup-independent add preflight, missing-file diagnostics, update mapping resolution, warning-only ownership/permission differences, inherited-value acceptance, ignored provenance, in-place versus replacement edit planning, CRLF refusal, no-op installs with read-only/immutable mappings, and initial end-of-file startup placement; these never use the real shell configuration or Keychain:
 
 ```sh
 osascript -l JavaScript tests/config-preflight.js "$PWD/macos-keychain-env-secrets/scripts/config-preflight.js"
@@ -171,7 +175,7 @@ A read-only native path test substitutes a synthetic item reference and uses the
 osascript -l JavaScript tests/keychain-path.js "$PWD/macos-keychain-env-secrets/scripts/store-secret.js"
 ```
 
-An optional development-only Python 3 check compares the remaining production metadata attribute keys with the installed Security.framework, without Keychain calls. Python is not required at runtime:
+An optional development-only Python 3 check compares production metadata attribute keys and query/reference literals with the installed Security.framework, without Keychain calls. Python is not required at runtime:
 
 ```sh
 python3 tests/security-constants.py "$PWD/macos-keychain-env-secrets/scripts/store-secret.js"
@@ -182,5 +186,3 @@ The shell loader has isolated tests with a fake `security` command and a tempora
 ```sh
 /bin/sh tests/shell-loader.sh
 ```
-
-The previous layout received a user-authorized add/update/remove agent trial on 2026-10-13. The author's local configuration was subsequently migrated to the managed layout, and the author confirmed that shell loading works. The later 2026-10-14 user-reported full workflow above covers the managed layout and CLI check/remove backend before removal of explicit trust flags.

@@ -32,7 +32,14 @@ def main():
         value = re.search(rf"\b{key}: '([^']+)'", keys.group(1))
         if value is None or value.group(1) != security_string(native):
             raise RuntimeError('Production attribute differs from installed framework')
-    print('PASS: metadata attributes match installed Security.framework')
+    literals = {
+        'r_Ref': 'kSecReturnRef', 'm_Limit': 'kSecMatchLimit',
+        'm_LimitAll': 'kSecMatchLimitAll', 'v_Ref': 'kSecValueRef',
+    }
+    for literal, native in literals.items():
+        if f"$('{literal}')" not in source or literal != security_string(native):
+            raise RuntimeError('Production query literal differs from installed framework')
+    print('PASS: metadata attributes and query/reference literals match installed Security.framework')
 
 
 if __name__ == '__main__':

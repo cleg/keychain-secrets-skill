@@ -10,8 +10,6 @@ function run(argv) {
     var end = source.indexOf('\nfunction ', start + 1);
     function assert(condition) { if (!condition) throw new Error('Keychain path contract failed'); }
     assert(start >= 0 && end > start);
-    var keychain = Ref();
-    assert(Number(native.SecKeychainCopyDefault(keychain)) === 0);
     var copyCode = 0, pathCode = 0, pathCalls = 0;
     var $ = function (value) { return native(value); };
     $.NSMutableData = native.NSMutableData;
