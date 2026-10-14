@@ -1,71 +1,118 @@
 ---
 name: macos-keychain-env-secrets
-description: Manage API secrets stored as macOS Keychain generic passwords and loaded into environment variables by ~/.zshrc. Use for add, remove, update, list, and check of Keychain-backed shell secrets.
+description: Manage API secrets stored as macOS Keychain generic passwords and loaded into environment variables through managed shell configuration under ~/.config/keychain-env. Use for install, add, remove, update, list, and check of Keychain-backed shell secrets.
 ---
 
 # macOS Keychain environment secrets
 
-Manage a mapping from a zsh environment variable to a macOS Keychain generic-password item. This is an agent-independent procedure, not a script to execute blindly. Supported operations: `add`, `remove`, `update`, `list`, `check`.
+A simple local automation around macOS `security` and shell environment mappings. Mappings contain names, not secret values; handle them as ordinary user configuration, not an enterprise security boundary. **Automate the expected flow; pause for concrete unexpected conditions.** This is not a production secrets-management platform. Implementation trade-offs and limitations are documented in the repository README; do not turn them into repeated warnings or consent gates.
 
-## Non-negotiable safety rules
+## Operating rules
 
-- Never display, quote, log, summarize, or echo a secret value in responses, terminal output, command traces, diffs, or test results. Never paste a secret into a tool call. Do not use `security find-generic-password -w` or `-g` for inspection; never run `env`, `printenv`, `set`, `set -x`, or `zsh -x` as a verification step where secrets may appear.
-- Do not pass a secret as a command-line argument, environment variable, stdin in a logged tool call, or temporary file. `security add-generic-password` supports an interactive password prompt when `-w` is its last option and has no value. Use an actual interactive terminal for entry; the human types the secret directly into that prompt. Never ask the human to paste the value into chat. If an interactive terminal is unavailable, stop and explain that the human must perform the interactive entry locally; do not substitute `-w "$TOKEN"` or another unsafe workaround.
-- Do not modify `~/.zshrc` or Keychain for `list` or `check`. Never source `~/.zshrc` to inspect mappings: it can run arbitrary code and load secrets. Do not print the full file, which may contain unrelated credentials. Read locally and show only redacted structure, variable names, service names, and status.
-- Default account is the current macOS account (`$USER`), service is the user-chosen Keychain name. Use a consistent account/service pair for lookup, modification, and deletion. Quote non-secret names as shell arguments. Avoid shell injection: never interpolate user-supplied names into executable shell source without correct shell quoting; validate environment-variable names against `^[A-Za-z_][A-Za-z0-9_]*$`.
-- Before *every* edit of `~/.zshrc`, make a timestamped, collision-safe backup outside version control, preserving ownership and restricting backup access to the owner (mode 600). The file or its backups may contain unrelated secrets; never print or commit either. Edit atomically where possible, preserve unrelated content, and validate syntax with `zsh -n ~/.zshrc` without sourcing. If validation fails, restore the backup. Do not silently delete backups.
-- Treat ambiguity, a locked Keychain, access denial, or other `security` errors as errors, not proof that an item is absent. Do not overwrite or delete unrelated data. Explain partial completion if one of the Keychain/file operations fails; never claim a transaction was atomic.
-- If the specific operation or observed state suggests that continuing could damage the user's configuration, overwrite a value, or delete the wrong item, stop before that action, explain the concrete risk without exposing secrets, and ask the user how to proceed. Do not pause for merely hypothetical edge cases.
+- Never request a secret in chat or put one in tool-call arguments, output, logs, traces, or temporary files. Native hidden entry collects the value and returns only status. Internal subprocess arguments are part of the documented implementation, not an extra consent step.
+- Do not read passwords for inspection or verification: no `security find-generic-password -w`/`-g`, environment dumps, or shell tracing. Do not source configuration to inspect it.
+- Resolve variable, service, account, and shell consistently. Validate names using [CONFIG.md](references/CONFIG.md); quote non-secret arguments rather than interpolating executable source. Default account is the current macOS account; do not blindly trust a changed `$USER`.
+- Preserve unrelated configuration and follow [SHELL-EDIT.md](references/SHELL-EDIT.md) for edits. Do not expose configuration contents, diffs, backups, or raw syntax diagnostics.
+- Do not silently overwrite collisions, guess dynamic mappings, bypass Keychain ambiguity/ownership checks, or treat errors as absence. Report partial completion if Keychain and file operations differ.
+- A clear add/update request authorizes the resolved operation. Preflight, briefly identify the target, and open secure entry without another chat confirmation. Ask when information is missing, scope is ambiguous, or an observed conflict/error requires a new decision. Keep deletion confirmation.
 
-## Mapping and helper
+## Installed helper
 
-Detect the actual existing helper and `export VARIABLE="$(helper 'service')"`-style mappings by inspecting `~/.zshrc` without evaluating it. Existing installations may use `keychain_secret`; do not assume every user does. Match only clearly recognized mappings. If the helper exists, reuse it; if it lacks the required warning-on-failure behavior, update it cautiously after backup. If it has unfamiliar semantics or cannot be changed safely, ask before altering it. If no suitable helper exists, add one (and a descriptive comment) without disturbing other code.
+During secret management, use the installed `scripts/store-secret.js` unchanged. Do not patch, instrument, inline, or regenerate it to work around a failure. Skill development is a separate explicitly authorized task and must not use real secrets as debugging inputs.
 
-Suggested zsh helper (adapt account handling to the existing convention):
+Before each invocation, verify its SHA-256 using system `shasum`. Resolve the script relative to the installed skill, not the working directory:
 
-```zsh
-keychain_secret() {
-  local value
-  if value=$(security find-generic-password -a "$USER" -s "$1" -w 2>/dev/null); then
-    printf '%s' "$value"
-  else
-    printf 'Warning: Keychain secret for service %s is unavailable; exporting an empty value.\n' "$1" >&2
-    return 0
-  fi
-}
+```sh
+script='/resolved/installed/skill/scripts/store-secret.js'
+expected='eb8d8c372bdbc4b4d21f812e53ce558572153e23674e01abe2ce7fc1c046e483'
+if actual=$(/usr/bin/shasum -a 256 < "$script") &&
+   [ "${actual%% *}" = "$expected" ]; then
+  :
+else
+  printf '%s\n' 'Helper integrity check failed; stop.' >&2
+  exit 1
+fi
 ```
 
-`$(...)` captures stdout but leaves stderr visible, so the warning appears when the shell starts while the exported variable still exists with an empty value. Do not print the password in the warning. This helper deliberately reports any read failure as unavailable; `check` should investigate the cause without exposing a value. Note: exporting secrets puts them in the environment of child processes; that is an explicit tradeoff of this workflow. Warn if a proposed service name or variable name reveals sensitive metadata.
+On mismatch or an unreadable helper, stop before execution or mutation; ask to restore a trusted installation or authorize a separate upgrade. Do not repair the pin or use a fallback to bypass failure. Successful verification is an internal check, not a user-facing checkpoint. The reviewed digest is `eb8d8c372bdbc4b4d21f812e53ce558572153e23674e01abe2ce7fc1c046e483`.
+
+Invoke with three safely quoted non-secret arguments:
+
+```sh
+osascript -l JavaScript '/resolved/installed/skill/scripts/store-secret.js' check 'service-name' 'resolved-account'
+```
+
+Operations are `add`, `update`, `check`, and `remove`. Allow sufficient time for secure entry or system authorization. Parse the JSON status, not just the process exit code:
+
+| Status | Action |
+| --- | --- |
+| `created`, `updated`, `deleted` | Corresponding operation succeeded. |
+| `present` | One metadata match and a successful scoped CLI metadata lookup; not password/API validation. |
+| `missing` | No matching item; not an access failure. |
+| `already_exists` | Add collision; do not silently switch to update. |
+| `ambiguous` | Multiple matches; ask to resolve the target. |
+| `cancelled`, `validation_failed` | No write; leave configuration unchanged. |
+| `invalid_arguments`, `error` | Stop, investigate status/metadata without reading passwords, and report safe numeric codes only. |
+
+Check/remove resolve unique metadata and the owning Keychain, then call `security find-generic-password` without password flags or `security delete-generic-password` there. Update uses scoped `add-generic-password -U`; add is insert-only in the default Keychain. CLI I/O is discarded, and CLI failures return generic helper code `-99902`. Do not substitute unscoped deletion or hand-written update calls that bypass the helper's checks.
+
+## Read-only configuration helper
+
+Use the installed `scripts/config-preflight.js` unchanged for installation planning, add preflight, and variable-based update resolution. Before every invocation, use the same `shasum` verification procedure above with that script's absolute path and expected digest `3aacddce86613c4a6a9c131f4e0154de4ceb67099d0b9e711e177445cc256c80`. Integrity failure stops the operation without fallback.
+
+```sh
+osascript -l JavaScript '/resolved/installed/skill/scripts/config-preflight.js' install
+osascript -l JavaScript '/resolved/installed/skill/scripts/config-preflight.js' add 'VARIABLE' 'service-name'
+# Optional fourth argument: explicit account; otherwise actual macOS account, not inherited USER.
+osascript -l JavaScript '/resolved/installed/skill/scripts/config-preflight.js' resolve-update 'VARIABLE'
+```
+
+Parse JSON: `ready` permits the requested install plan or add's secure-entry step; `resolved` supplies update's exact service/account. A `warnings` array is informational: briefly mention relevant access/ownership concerns and continue on `ready` or `resolved` without asking for approval. Non-default permissions, different ownership, hard links, and inherited credential variables alone do not block a usable operation. Ignore provenance metadata. `blocked`, `error`, and `invalid_arguments` stop before mutation. On add's `installation_required`, report missing paths and suggest running this skill's `install` operation, or checking `.zshrc`/the selected shell integration manually. Do not install automatically during add. Add assumes installation when both managed files exist; it validates managed files and mappings but never reads startup files, discovers the login shell, checks ZDOTDIR, or compares the loader with the bundle. It does not verify shell loading. Only install returns a startup path and installation plan. All operations are read-only, never access Keychain, and return metadata rather than file contents. Resolve-update inspects mappings, not loader/startup or file writability. Baselines are not locks; check content and destination before editing using SHELL-EDIT.md. Stop for concrete access failures or ambiguity, not routine metadata differences.
+
+## Configuration and entry
+
+Read [CONFIG.md](references/CONFIG.md) before working with mappings. Runtime files are fixed at `~/.config/keychain-env/init.sh` and `mappings.sh`. Install bundled `scripts/init.sh` unchanged. Keep mappings canonical and inspect them without execution. Routine mapping changes do not edit startup files.
+
+Startup integration belongs exclusively to the explicit [install workflow](references/INSTALL.md). Add assumes existing integration and changes only mappings; startup troubleshooting is a separately requested task.
+
+Secrets must be non-empty single-line text without CR, LF, or NUL. Spaces and Unicode are preserved. Native entry enforces this; do not read existing values to validate their format.
+
+A timeout, interruption, or generic error does not prove cancellation or native-entry unavailability. Recheck metadata before retrying a possibly started write; explain uncertain outcomes and ask before another write. Do not blindly retry or switch entry methods.
+
+If native entry is independently known to be unavailable before an add write, a fresh verified `missing` check permits an actual interactive terminal using `security add-generic-password -a 'resolved-account' -s 'service-name' -w`, with no value after `-w`. Do not capture entry; explain the supported single-line format. If no interactive terminal is available, provide a safely quoted local command and wait for completion confirmation. Update has no interactive fallback bypassing ownership checks. Helper integrity failure never permits a fallback.
 
 ## Operations
 
-### `add`
+### Install
 
-1. Ask for the environment variable name and the Keychain service name separately, plus which shell/account to use if not the default. Confirm intent without asking for the value in chat.
-2. Inspect `~/.zshrc` for the variable, mapping and helper; check for an existing matching account/service item without requesting its password. If either name collides or the mapping is ambiguous, stop and resolve it with the user. Do not silently use `-U`: that would overwrite an existing item.
-3. In an interactive terminal, let the human enter the secret directly at the prompt, with `-w` last and no value: `security add-generic-password -a "$USER" -s 'service-name' -w`. Do not display the input or capture the prompt's output in a transcript. If this cannot be done safely from the available interface, provide this command with a *placeholder service name* for the user to run locally and pause until they confirm success.
-4. Back up `~/.zshrc`, install/update the helper as needed, and add exactly one safely quoted export mapping. Validate syntax. If the file edit fails after Keychain insertion, tell the user an orphan Keychain item may remain; do not silently delete it.
+On an explicit install/init request, follow [INSTALL.md](references/INSTALL.md). This autonomously sets up managed files and shell integration without creating a secret. Default zsh placement is the end of `~/.zshrc`; mention that the user can move the block afterwards. Ordinary startup includes/eval do not require a placement confirmation. Keep installation separate from add.
 
-### `remove`
+### Add
 
-1. Resolve the exact variable and service mapping from `~/.zshrc` (or ask for both if removing an explicitly identified Keychain-only item). Show names and request confirmation before deleting the Keychain item.
-2. Search for other references to that account/service in the recognized mappings. If shared, do not delete the Keychain item while another export still depends on it; ask whether to remove just this export. If unsure, stop.
-3. Back up and remove only the target export from `~/.zshrc`; do not automatically remove a shared helper. Validate syntax. Then, if safe and confirmed, delete the exact item with `security delete-generic-password -a "$USER" -s 'service-name'`. If deletion fails, report that the export was removed but the item remains. Do not expose its value.
+Follow [ADD.md](references/ADD.md): require existing managed files, run read-only preflight once, invoke secure `add` directly, then edit mappings only on `created`. Missing files stop add with installation guidance. Use the installed helper rather than generating inspection scripts; its normal path needs no separate Keychain `check`.
 
-### `update`
+### Update
 
-1. Accept either the Keychain service name or an environment variable name. For a variable, resolve the service from a single, unambiguous recognized `~/.zshrc` mapping; otherwise ask for clarification. Confirm the target account/service.
-2. Verify the item's status without reading its value. If present, use interactive `security add-generic-password -a "$USER" -s 'service-name' -U -w` (`-w` last, no value) to replace it. If absent, distinguish that state from other errors and ask whether to create the item instead. Never use `-U` during `add` without consent.
-3. Do not edit `~/.zshrc` for a normal update; no zshrc backup is needed. State that existing shells and child processes will retain their old exported value until the environment is reloaded/new shells start; do not print either value.
+1. For a variable target, verify the configuration helper and invoke `resolve-update VARIABLE`; continue only on `resolved`, using its service/account. For an explicitly requested service/account, resolve those literals directly without configuration inspection. State the target; do not reconfirm a clear request.
+2. Verify `store-secret.js` and invoke `update SERVICE ACCOUNT` directly. Its internal preflight requires a unique existing item and resolved owning Keychain before native entry; no separate `check` is needed. Require `updated`. On `missing`, ask before creating instead; ambiguity/error stops. Cancellation leaves the value unchanged.
+3. Leave configuration unchanged; no startup inspection, writable-file preflight, or configuration backups are needed. Existing shells retain the old value until reloaded or replaced; do not load passwords for agent verification.
 
-### `list`
+### Remove
 
-Parse recognized Keychain-backed exports in `~/.zshrc` without executing it. Show environment variable, service name, and account convention (usually `$USER`), never values. Mark unrecognized or dynamically constructed mappings as `unresolved` rather than guessing. This is **not** an inventory of all Keychain items. Avoid printing unrelated ordinary exports or lines with literal secrets.
+1. Resolve the exact variable/service/account. Inspect all canonical declarations and relevant legacy startup mappings for shared references. Show the target and obtain one confirmation of scope: declaration only, declaration plus item, or Keychain-only item.
+2. Shared or unresolved item references block item deletion, but permit declaration-only removal when the target declaration can be safely identified. Do not edit/migrate legacy code implicitly.
+3. For declaration-only scope, remove only the requested mapping using SHELL-EDIT.md. Leave Keychain unchanged and do not invoke check/remove. Report item status as unverified.
+4. For item-deletion scope, verify and invoke `check` before file edits; continue only on `present`. On `missing`, ask whether to remove just the declaration; ambiguity/error stops both mutations.
+5. Remove the target declaration if applicable, preserving other mappings, loader, and startup integration. Invoke verified `remove`. Report file and Keychain outcomes separately on failure. Existing shell/process values are not cleared by removing a mapping.
 
-### `check`
+### List
 
-For each recognized mapping from `~/.zshrc`, check Keychain metadata/existence for the correct account/service **without fetching its password**, e.g. `security find-generic-password -a "$USER" -s 'service-name' >/dev/null 2>/dev/null` and inspect the exit status. Report `present`, `missing`, or `unable to verify` (locked Keychain, denial, ambiguous/non-missing failure). Where needed, distinguish missing from errors by inspecting a *redacted* diagnostic/exit status privately, never dump unfiltered Keychain output into chat. Note unresolved mappings separately. A missing item means the helper will warn and export an empty value on shell startup. `check` cannot discover unused Keychain items or validate that a secret is accepted by its API.
+Read canonical mappings without executing them. Show variable, service, and account, never values. Report unfamiliar/dynamic code as unresolved. Missing configuration means no managed mappings; install nothing. This is not a Keychain inventory.
 
-## Completion report
+### Check
 
-Report the requested operation, variable/service names if appropriate, status, whether `~/.zshrc` was changed and backed up, and any remaining action. Never include secret values, raw file contents, or unredacted command output. For interactive commands, use placeholders for names unless safely quoted actual non-secret names are explicitly needed.
+For each canonical mapping, invoke verified `check` with the resolved service/account. Report `present`, `missing`, `ambiguous`, or `unable to verify` for errors/unavailable helper. Note unresolved mappings separately. Do not modify files, fetch passwords, or claim API validity. Missing items cause the loader to warn and export an empty value.
+
+## Completion
+
+Report the result briefly with target names and any action needed. For file changes, identify the changed file and backup location; do not enumerate internal checks or repeat general risk disclosures. Explain partial completion and recovery options when something failed. Mention existing-shell values when relevant, rather than giving a security disclaimer after every operation.
