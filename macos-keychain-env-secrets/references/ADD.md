@@ -1,29 +1,27 @@
 # Add a mapped secret
 
-Use this procedure for add only. Update changes the Keychain value without editing shell files; its shorter procedure is in SKILL.md.
+Use this procedure for add only. Update changes Keychain without editing files; its procedure is in [SKILL.md](../SKILL.md#update).
 
 ## 1. Resolve and preflight
 
-Resolve the requested environment variable and service; default account is the actual macOS account. Read CONFIG.md and SHELL-EDIT.md for mapping and file-edit rules.
+Read [CONFIG.md](CONFIG.md) for target constraints and [SHELL-EDIT.md](SHELL-EDIT.md) for file-edit rules. Resolve the requested variable and service, with any explicit account preserved exactly.
 
-Run the installed `scripts/config-preflight.js` once with `add VARIABLE SERVICE [ACCOUNT]`, using literal quoted non-secret arguments. Verify its pinned SHA-256 from SKILL.md before invocation. The helper is read-only: it inspects configuration without sourcing it and never calls Keychain or collects a secret. Use the returned resolved account, not an inherited USER value.
+Verify `config-preflight.js` under [Helper integrity](../SKILL.md#helper-integrity), then invoke it once with `add VARIABLE SERVICE [ACCOUNT]`, using literal quoted non-secret arguments. Apply the [configuration helper contract](../SKILL.md#read-only-configuration-helper-contract). Use the returned resolved account, not inherited USER.
 
-Continue only on `ready`; informational `warnings` do not require approval. On `installation_required`, report the missing managed files and suggest running this skill's explicit `install` operation. If the user already configured loading manually, suggest checking `.zshrc` or their selected shell integration themselves. Stop before native entry; add neither installs files nor inspects startup configuration. Other blocked/error/invalid-argument results also stop before mutation; resolve the concrete condition without replacing the helper or bypassing its refusal.
+**Continue only on `ready`.** On `installation_required`, report missing managed paths and suggest the explicit install operation. If loading was configured manually, suggest checking `.zshrc` or the selected shell integration themselves. Stop before native entry; do not install automatically. Other blocked/error/invalid-argument results also stop before mutation; resolve the concrete condition without bypassing the helper's refusal.
 
-Both `~/.config/keychain-env/init.sh` and `mappings.sh` must exist. Their presence is the installation marker, not proof that a shell sources them. Preflight checks actual access, syntax, canonical mappings, duplicate declarations, and a usable mapping-edit method. Ownership and non-default permissions are warnings; inherited credential values are allowed. It does not compare the installed loader with the bundle or inspect startup files, login shell, or ZDOTDIR. It cannot inspect unexported attributes in a separate running shell or detect assignments in startup files; runtime attribute checks remain in place.
+Both `~/.config/keychain-env/init.sh` and `mappings.sh` must exist; their presence is the installation marker, not proof of shell loading. Preflight checks actual access, syntax, canonical mappings, duplicate declarations, and a usable mapping-edit method. It never reads or changes startup files, discovers the login shell, checks ZDOTDIR, or compares the loader with the bundle. It cannot inspect unexported attributes in a separate running shell or detect startup assignments; runtime attribute checks remain in place.
 
 ## 2. Collect and create
 
-Briefly identify variable, service, and resolved account. Verify `scripts/store-secret.js` as specified in SKILL.md and invoke `add SERVICE ACCOUNT` directly. Its internal preflight rejects existing, ambiguous, or inaccessible targets before opening native entry; a separate `check` call is unnecessary on this normal path. It rechecks after entry before insert-only creation.
+Briefly identify variable, service, and resolved account. Verify `store-secret.js` and invoke `add SERVICE ACCOUNT` directly under the [Keychain helper contract](../SKILL.md#keychain-helper-contract). Its internal preflight rejects existing, ambiguous, or inaccessible targets before native entry and rechecks after entry before insert-only creation; no separate `check` is needed on this normal path.
 
-Continue only on `created`. On `already_exists`, ask before changing operation; never silently update. On `cancelled` or `validation_failed`, leave configuration untouched. Follow SKILL.md for errors, interruption, and uncertain writes; do not blindly retry.
+**Continue only on `created`.** On `already_exists`, ask before changing operation. On `cancelled` or `validation_failed`, leave configuration untouched. Follow [Write recovery](../SKILL.md#write-recovery) for interruption, uncertain writes, or established entry unavailability.
 
 ## 3. Add the mapping
 
-After `created`, use SHELL-EDIT.md to add exactly one canonical declaration for the resolved target. Use an explicit account if the shell's USER would select a different account. Preserve all other declarations and bytes.
+After `created`, follow SHELL-EDIT.md to add exactly one canonical declaration for the resolved target to the existing mappings.sh. Use an explicit account if the shell's USER would select a different account. Preserve all other declarations and bytes; leave init.sh and startup files untouched. Do not recreate a managed file that disappears after preflight.
 
-Change only the existing mappings.sh. Leave init.sh and all startup files untouched; do not recreate a file that disappears after preflight. Recheck content, target identity, and any symlink destinations immediately before writing; the earlier read-only preflight is not a lock or a substitute for these checks.
+**Complete when:** the helper returned `created`, the installed mapping matches the exact resolved variable/service/account, and the edit meets SHELL-EDIT.md's completion criterion. This establishes item creation and mapping installation, not runtime loading.
 
-Validate canonical format and shell syntax without sourcing. Continue only when installed content and syntax are verified; use practical access preservation rather than exhaustive metadata checks. Report the changed files and retained private backup paths.
-
-Keychain creation and file installation are not one transaction. If the mapping edit fails, report that the item was created, which files changed, and the recovery options. Do not silently delete the new item or claim the mapping is usable.
+Keychain creation and file editing are not one transaction. If the mapping edit fails, report that the item was created, the actual file outcome, and recovery options under [Completion report](../SKILL.md#completion-report). Do not silently delete the new item or claim the mapping is usable.

@@ -19,7 +19,9 @@ Treat mappings.sh as ordinary user configuration containing names, not passwords
 
 - Immediately before writing, confirm that the original content and resolved target identity/link destination still match what was read. Stop rather than overwriting a concurrent content edit or a changed destination. Metadata-only changes such as provenance do not constitute a conflict.
 - Apply using the chosen method. In-place writing preserves the inode and access metadata but is not atomic; atomic replacement is an option, not a requirement. For a newly created file, use an exclusive no-overwrite operation.
-- Verify installed content and syntax without sourcing. Check permissions or ownership only where the chosen method could change them; no exhaustive metadata comparison is needed.
+- Verify that installed bytes match the prepared candidate, canonical mapping validation passes where applicable, and the syntax checks from step 2 pass without sourcing. Check permissions or ownership only where the chosen method could change them; no exhaustive metadata comparison is needed.
+
+**Complete when:** all these installed-content, format, syntax, and applicable access checks pass, unrelated bytes are preserved, and the private backup is retained for an existing-file edit. Clean up known temporary candidates. This verifies the edit, not runtime loading.
 
 ## 4. Handle failures
 
