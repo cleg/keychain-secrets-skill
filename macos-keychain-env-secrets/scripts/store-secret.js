@@ -1,6 +1,8 @@
 // Run with: osascript -l JavaScript store-secret.js add|update|check|remove SERVICE ACCOUNT
 // Remove requires prior user confirmation and shared-mapping checks by the caller.
 // Only non-secret metadata is accepted as arguments. Never return dialog contents.
+// Boundary: argv and JSON carry names/status only; secret text stays inside this
+// process until the CLI write. The caller owns mapping edits and confirmation.
 ObjC.import('Foundation');
 ObjC.import('AppKit');
 ObjC.import('Security');
@@ -24,6 +26,8 @@ function itemQuery(service, account) {
 }
 
 function findItems(service, account) {
+    // Ask for attributes and item references, never kSecReturnData/password bytes.
+    // All matches are needed: accepting the first would hide cross-Keychain ambiguity.
     var query = itemQuery(service, account);
     query.setObjectForKey($.NSNumber.numberWithBool(true), $(keys.returnAttributes));
     query.setObjectForKey($.NSNumber.numberWithBool(true), $('r_Ref'));
@@ -56,6 +60,8 @@ function resolveTarget(service, account) {
 }
 
 function checkItem(service, account) {
+    // Presence means metadata lookup succeeded in the owning Keychain; it does not
+    // verify the password, API validity, or whether the runtime loader can read it.
     var target = resolveTarget(service, account);
     if (target.status !== 'resolved') return target;
     var code = securityMetadata('find-generic-password', service, account, target.path);
@@ -63,6 +69,8 @@ function checkItem(service, account) {
 }
 
 function preflight(operation, service, account) {
+    // Refuse collisions/missing updates before showing a secret-entry dialog.
+    // An access failure is not evidence that an item is absent.
     var result = checkItem(service, account);
     if ((operation === 'add' && result.status === 'missing') ||
         (operation === 'update' && result.status === 'present')) return { status: 'ready' };
@@ -145,6 +153,8 @@ function makeDialog(operation, service, account, retry) {
 }
 
 function validateValues(first, second) {
+    // Compare exact text: trimming or Unicode normalization would change a secret.
+    // Single-line validation also avoids command-substitution newline loss in loading.
     if (first.length === 0) return 'The secret must not be empty. Please try again.';
     if (/[\r\n\x00]/.test(first) || /[\r\n\x00]/.test(second)) {
         return 'Use a single-line secret without CR, LF, or NUL characters. Please try again.';
@@ -164,6 +174,8 @@ function showValidationError(message, exhausted) {
 }
 
 function securityWrite(service, account, value, keychain) {
+    // Argument arrays avoid shell interpretation, but the value is still a local
+    // process argument. No explicit trust flags are added; CLI/default ACLs apply.
     var args = ['add-generic-password', '-a', account, '-s', service, '-w', value];
     // Add is insert-only; update explicitly accepts CLI upsert races.
     if (keychain) args.push('-U', keychain);
@@ -182,6 +194,8 @@ function addItem(service, account, value) {
 }
 
 function itemKeychainPath(item) {
+    // Resolve ownership from the native item reference, not the default Keychain.
+    // The fixed-size native buffer is checked before decoding a usable absolute path.
     var reference = item.objectForKey($('v_Ref'));
     if (!reference) throw new Error('Missing item reference');
     var keychain = Ref();
@@ -211,6 +225,8 @@ function writeItem(operation, service, account, value) {
 }
 
 function collectAndStore(operation, service, account) {
+    // Limit validation retries and clear UI fields before validation or writing.
+    // Nulling JS references shortens retention; it does not guarantee memory erasure.
     var retry = null;
     for (var attempt = 0; attempt < 3; attempt++) {
         var dialog = makeDialog(operation, service, account, retry);

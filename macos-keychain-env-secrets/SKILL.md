@@ -24,7 +24,7 @@ Before each invocation, verify its SHA-256 using system `shasum`. Resolve the sc
 
 ```sh
 script='/resolved/installed/skill/scripts/store-secret.js'
-expected='eb8d8c372bdbc4b4d21f812e53ce558572153e23674e01abe2ce7fc1c046e483'
+expected='081a7d19c980cbeefd8495f4402d7518afe54085e759b7828743607f734071a6'
 if actual=$(/usr/bin/shasum -a 256 < "$script") &&
    [ "${actual%% *}" = "$expected" ]; then
   :
@@ -34,7 +34,7 @@ else
 fi
 ```
 
-On mismatch or an unreadable helper, stop before execution or mutation; ask to restore a trusted installation or authorize a separate upgrade. Do not repair the pin or use a fallback to bypass failure. Successful verification is an internal check, not a user-facing checkpoint. The reviewed digest is `eb8d8c372bdbc4b4d21f812e53ce558572153e23674e01abe2ce7fc1c046e483`.
+On mismatch or an unreadable helper, stop before execution or mutation; ask to restore a trusted installation or authorize a separate upgrade. Do not repair the pin or use a fallback to bypass failure. Successful verification is an internal check, not a user-facing checkpoint. The reviewed digest is `081a7d19c980cbeefd8495f4402d7518afe54085e759b7828743607f734071a6`.
 
 Invoke with three safely quoted non-secret arguments:
 
@@ -58,7 +58,7 @@ Check/remove resolve unique metadata and the owning Keychain, then call `securit
 
 ## Read-only configuration helper
 
-Use the installed `scripts/config-preflight.js` unchanged for installation planning, add preflight, and variable-based update resolution. Before every invocation, use the same `shasum` verification procedure above with that script's absolute path and expected digest `3aacddce86613c4a6a9c131f4e0154de4ceb67099d0b9e711e177445cc256c80`. Integrity failure stops the operation without fallback.
+Use the installed `scripts/config-preflight.js` unchanged for installation planning, add preflight, and variable-based update resolution. Before every invocation, use the same `shasum` verification procedure above with that script's absolute path and expected digest `ee821165521a7926cc215539ddd628835e6e06e6f817a6e65e54e3bd6a755000`. Integrity failure stops the operation without fallback.
 
 ```sh
 osascript -l JavaScript '/resolved/installed/skill/scripts/config-preflight.js' install

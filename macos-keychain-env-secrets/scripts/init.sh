@@ -2,6 +2,9 @@
 # Attribute inspection uses shell-specific builtins/parameter expansion.
 # This file and mappings.sh are trusted executable configuration, not a sandbox.
 
+# Runtime intentionally reads a password, unlike management metadata checks.
+# It uses the current search list, not the helper's unique-item ownership check;
+# resolve duplicate items before relying on which credential will be loaded.
 _keychain_env_read() (
     # A subshell keeps the password and temporary state out of the parent shell.
     if _keychain_env_value=$(command security find-generic-password \
@@ -69,6 +72,8 @@ keychain_env() {
         printf 'Warning: cannot export Keychain variable %s; mapping skipped.\n' "$1" >&2
         return 0
     fi
+    # A failed read emits no stdout, so this replaces an old value with empty text.
+    # Command substitution removes trailing newlines; managed secrets are single-line.
     # One quoted assignment argument: neither the name nor value is evaluated.
     if export "$1=$(_keychain_env_read "$2" "${3-${USER-}}")" 2>/dev/null; then
         :
@@ -78,6 +83,8 @@ keychain_env() {
     return 0
 }
 
+# Reset duplicate tracking on every reload; the first declaration wins.
+# Sourcing intentionally executes trusted configuration: it is not a parser.
 _keychain_env_seen=''
 if [ -r "$HOME/.config/keychain-env/mappings.sh" ]; then
     . "$HOME/.config/keychain-env/mappings.sh"

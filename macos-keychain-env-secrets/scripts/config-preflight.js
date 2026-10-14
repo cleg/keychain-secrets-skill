@@ -4,6 +4,7 @@
 // osascript -l JavaScript /absolute/path/config-preflight.js resolve-update VARIABLE
 ObjC.import('Foundation');
 ObjC.bindFunction('getuid', ['unsigned int', []]);
+// Bound file inspection; this helper plans changes but never applies them.
 var MAX_BYTES = 1048576;
 // -c text shares macOS ARG_MAX with arguments/environment. Keep fragments
 // comfortably below that limit; full-file syntax checks still use syntax(path).
@@ -29,6 +30,8 @@ function validVariable(value) {
 }
 
 function parseMappingLine(line) {
+    // Parse the small literal mapping grammar rather than eval/source shell code.
+    // Shell syntax validity alone would still admit commands and expansions.
     if (/^[ \t]*(#.*)?$/.test(line)) return null;
     var prefix = /^[ \t]*keychain_env[ \t]+/.exec(line);
     if (!prefix) stop('noncanonical_mappings');
@@ -92,6 +95,8 @@ function inspectDirectory(path, ctx, io, privateMode, writable) {
 }
 
 function inspectFile(path, scope, ctx, io, privateMode) {
+    // Follow only bounded, in-scope file links and return identities for the editor.
+    // This snapshot is not a lock: the caller must recheck before writing.
     var original = path, links = [], info;
     for (var depth = 0; depth < 16; depth++) {
         info = io.stat(path);
@@ -144,6 +149,8 @@ function editParent(file, ctx, io) {
 }
 
 function startupInspection(ctx, io) {
+    // Install-only inspection recognizes the managed block without running startup
+    // code. Unfamiliar integration is left for review, not guessed or migrated.
     var names = ctx.shell === 'zsh' ? ['.zshenv', '.zprofile', '.zshrc', '.zlogin'] :
         ['.bash_profile', '.bash_login', '.bashrc', '.profile'];
     var files = {}, integrated = [];
@@ -219,6 +226,8 @@ function inspectConfiguration(result, ctx, io) {
 }
 
 function resolveUpdate(result, inspected) {
+    // Update needs only the canonical service/account, not a writable config or
+    // verified shell integration; the separate Keychain helper performs the write.
     var found = inspected.declarations.filter(function (item) { return item.variable === result.variable; });
     if (!found.length) stop('mapping_not_found');
     result.service = found[0].service; result.account = found[0].account;
@@ -228,6 +237,8 @@ function resolveUpdate(result, inspected) {
 }
 
 function planAdd(result, inspected, ctx, io) {
+    // Existing managed files mark installation for add. Startup discovery and
+    // loader replacement belong to explicit install, not this credential operation.
     if (inspected.declarations.some(function (item) { return item.variable === result.variable; })) {
         stop('variable_already_mapped');
     }
@@ -282,6 +293,8 @@ function configurationPreflight(argv, ctx, io) {
 }
 
 function foundationIO() {
+    // Keep platform I/O behind one adapter so isolated tests can exercise policy
+    // without touching the real home directory, shell startup, or Keychain.
     var fm = $.NSFileManager.defaultManager;
     return {
         stat: function (path) {
@@ -340,6 +353,8 @@ function foundationIO() {
 }
 
 function silentTask(path, args, capture) {
+    // Capture is used only for account shell metadata. Syntax-check output stays
+    // discarded because startup-file diagnostics can reveal unrelated secrets.
     var task = $.NSTask.alloc.init, pipe = capture ? $.NSPipe.pipe : null;
     task.setLaunchPath(path); task.setArguments($(args));
     task.setStandardInput($.NSFileHandle.fileHandleWithNullDevice);
@@ -358,6 +373,8 @@ function productionContext(operation) {
     var script = args.filter(function (arg) { return /^\/.*\/config-preflight\.js$/.test(arg); })[0];
     if (!script) stop('absolute_script_path_required', 'error');
     script = ObjC.unwrap($(script).stringByResolvingSymlinksInPath);
+    // Resolve the actual macOS identity; inherited USER is not authoritative.
+    // Only install needs login-shell discovery; add/update ignore startup files.
     var account = ObjC.unwrap($.NSUserName());
     var shell = operation === 'install' ?
         silentTask('/usr/bin/dscl', ['.', '-read', '/Users/' + account, 'UserShell'], true) : { code: 1 };
